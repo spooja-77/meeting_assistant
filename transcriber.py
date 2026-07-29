@@ -1,41 +1,46 @@
 """
 transcriber.py
 --------------
-Converts a .wav audio file into text using OpenAI's Whisper model
-(running locally, not via API).
+Converts recorded audio into text using Groq's hosted Whisper model.
+
+Why an API instead of local Whisper?
+- Streamlit Cloud has no microphone and limited CPU/RAM, so running
+  PyTorch + a Whisper model locally is slow and often exceeds free-tier
+  resource limits.
+- Groq already hosts Whisper (whisper-large-v3-turbo) as an API endpoint,
+  so we reuse the same Groq client we use for summarization - one API,
+  one API key, no FFmpeg or PyTorch dependency needed.
 """
 
-import whisper
-from config import WHISPER_MODEL_SIZE
+from groq import Groq
+from config import GROQ_API_KEY, GROQ_WHISPER_MODEL
 
-# Whisper models are large (tens to hundreds of MB) and slow to load.
-# We cache the loaded model in a module-level variable so it's only
-# loaded once per app run, not on every transcription request.
-_model = None
+_client = Groq(api_key=GROQ_API_KEY)
 
 
-def _get_model():
-    """Load the Whisper model once and reuse it on subsequent calls."""
-    global _model
-    if _model is None:
-        _model = whisper.load_model(WHISPER_MODEL_SIZE)
-    return _model
-
-
-def transcribe_audio(wav_path: str) -> str:
+def transcribe_audio(audio_bytes: bytes, filename: str = "recording.wav") -> str:
     """
-    Transcribe the given .wav file to text.
+    Transcribe raw audio bytes to text using Groq's Whisper API.
 
     Args:
-        wav_path: path to a .wav audio file on disk.
+        audio_bytes: raw audio file bytes, e.g. from st.audio_input().getvalue()
+        filename: filename hint sent with the upload (extension matters
+                  for the API to know the audio format).
 
     Returns:
-        The transcribed text as a single string.
+        The transcribed text as a plain string.
     """
-    model = _get_model()
+    if not audio_bytes:
+        raise ValueError("No audio data provided to transcribe.")
 
-    # fp16=False avoids a warning/error on machines without a compatible GPU
-    # (CPU-only inference falls back to fp32 automatically).
-    result = model.transcribe(wav_path, fp16=False)
+    transcription = _client.audio.transcriptions.create(
+        file=(filename, audio_bytes),
+        model=GROQ_WHISPER_MODEL,
+        response_format="text",
+    )
 
-    return result["text"].strip()
+    # response_format="text" returns a plain string; some SDK versions may
+    # wrap it in an object with a .text attribute, so handle both safely.
+    if isinstance(transcription, str):
+        return transcription.strip()
+    return transcription.text.strip()
