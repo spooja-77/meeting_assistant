@@ -1,8 +1,8 @@
 """
 app.py
 ------
-Main Streamlit application. Ties together recording, transcription,
-summarization, database storage, and Word export into one UI.
+Main Streamlit application. Ties together recording (via the browser
+mic), transcription, summarization, database storage, and Word export.
 
 Run with:
     streamlit run app.py
@@ -10,7 +10,6 @@ Run with:
 
 import streamlit as st
 
-from audio_recorder import AudioRecorder
 from transcriber import transcribe_audio
 from summarizer import generate_meeting_insights
 from docx_generator import create_meeting_docx
@@ -24,20 +23,15 @@ st.title("🎙️ AI Meeting Assistant")
 
 # --- Session state initialization ---
 # Streamlit reruns the script top-to-bottom on every interaction, so any
-# data that needs to persist between reruns (like the recorder object,
-# the current transcript, etc.) must live in st.session_state.
-if "recorder" not in st.session_state:
-    st.session_state.recorder = AudioRecorder()
-if "wav_path" not in st.session_state:
-    st.session_state.wav_path = None
+# data that needs to persist between reruns must live in st.session_state.
+if "audio_bytes" not in st.session_state:
+    st.session_state.audio_bytes = None
 if "transcript" not in st.session_state:
     st.session_state.transcript = None
 if "insights" not in st.session_state:
     st.session_state.insights = None
 if "docx_path" not in st.session_state:
     st.session_state.docx_path = None
-
-recorder = st.session_state.recorder
 
 tab_record, tab_history = st.tabs(["🎤 New Meeting", "📚 Meeting History"])
 
@@ -46,41 +40,37 @@ tab_record, tab_history = st.tabs(["🎤 New Meeting", "📚 Meeting History"])
 # ============================================================
 with tab_record:
     st.subheader("Step 1: Record Meeting Audio")
+    st.caption("Uses your browser's microphone - works locally and when deployed.")
 
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("● Start Recording", disabled=recorder.is_recording):
-            recorder.start()
-            st.success("Recording started... speak now.")
+    # st.audio_input records from the user's browser mic and returns an
+    # UploadedFile-like object (or None if nothing recorded yet).
+    audio_value = st.audio_input("Record your meeting")
 
-    with col2:
-        if st.button("■ Stop Recording", disabled=not recorder.is_recording):
-            wav_path = recorder.stop_and_save()
-            st.session_state.wav_path = wav_path
-            st.success(f"Recording saved: {wav_path}")
+    if audio_value is not None:
+        st.session_state.audio_bytes = audio_value.getvalue()
 
-    if recorder.is_recording:
-        st.info("🔴 Recording in progress... click Stop when finished.")
-
-    # --- Step 2: Transcribe ---
-    if st.session_state.wav_path:
-        st.audio(st.session_state.wav_path)
         st.subheader("Step 2: Transcribe Audio")
-
-        if st.button("Transcribe with Whisper"):
-            with st.spinner("Transcribing audio... this may take a moment."):
-                st.session_state.transcript = transcribe_audio(st.session_state.wav_path)
+        if st.button("Transcribe with Whisper (via Groq)"):
+            with st.spinner("Transcribing audio..."):
+                st.session_state.transcript = transcribe_audio(
+                    st.session_state.audio_bytes, filename="recording.wav"
+                )
             st.success("Transcription complete!")
 
     # --- Step 3: Show transcript + generate insights ---
     if st.session_state.transcript:
         st.subheader("Transcript")
-        st.text_area("Transcript", st.session_state.transcript, height=200, label_visibility="collapsed")
+        st.text_area(
+            "Transcript", st.session_state.transcript, height=200,
+            label_visibility="collapsed",
+        )
 
         st.subheader("Step 3: Generate AI Insights")
         if st.button("Generate Summary / MoM / Action Items"):
             with st.spinner("Contacting Groq API..."):
-                st.session_state.insights = generate_meeting_insights(st.session_state.transcript)
+                st.session_state.insights = generate_meeting_insights(
+                    st.session_state.transcript
+                )
             st.success("Insights generated!")
 
     # --- Step 4: Display insights + save + export ---
